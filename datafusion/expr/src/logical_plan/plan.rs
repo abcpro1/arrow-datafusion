@@ -47,7 +47,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     aggregate_functional_dependencies, internal_err, plan_err, Column, Constraints,
-    DFField, DFSchema, DFSchemaRef, DataFusionError, FunctionalDependencies,
+    DFField, DFSchema, DFSchemaRef, DataFusionError, Dependency, FunctionalDependencies,
     OwnedTableReference, Result, ScalarValue, UnnestOptions,
 };
 // backwards compatibility
@@ -993,7 +993,13 @@ impl LogicalPlan {
     pub fn max_rows(self: &LogicalPlan) -> Option<usize> {
         match self {
             LogicalPlan::Projection(Projection { input, .. }) => input.max_rows(),
-            LogicalPlan::Filter(Filter { input, .. }) => input.max_rows(),
+            LogicalPlan::Filter(filter) => {
+                if filter.is_scalar() {
+                    Some(1)
+                } else {
+                    filter.input.max_rows()
+                }
+            }
             LogicalPlan::Window(Window { input, .. }) => input.max_rows(),
             LogicalPlan::Aggregate(Aggregate {
                 input, group_expr, ..
@@ -1866,6 +1872,84 @@ impl Filter {
 
         Ok(Self { predicate, input })
     }
+
+    fn is_scalar(&self) -> bool {
+        let schema = self.input.schema();
+
+        let functional_dependencies = self.input.schema().functional_dependencies();
+        let unique_keys = functional_dependencies.iter().filter(|dep| {
+            let nullable = dep.nullable
+                && dep
+                    .source_indices
+                    .iter()
+                    .any(|&source| schema.field(source).is_nullable());
+            !nullable
+                && dep.mode == Dependency::Single
+                && dep.target_indices.len() == schema.fields().len()
+        });
+
+        /// Splits a conjunctive [`Expr`] such as `A AND B AND C` => `[A, B, C]`
+        pub fn split_conjunction(expr: &Expr) -> Vec<&Expr> {
+            split_conjunction_impl(expr, vec![])
+        }
+
+        fn split_conjunction_impl<'a>(
+            expr: &'a Expr,
+            mut exprs: Vec<&'a Expr>,
+        ) -> Vec<&'a Expr> {
+            match expr {
+                Expr::BinaryExpr(BinaryExpr {
+                    right,
+                    op: Operator::And,
+                    left,
+                }) => {
+                    let exprs = split_conjunction_impl(left, exprs);
+                    split_conjunction_impl(right, exprs)
+                }
+                Expr::Alias(Alias { expr, .. }) => split_conjunction_impl(expr, exprs),
+                other => {
+                    exprs.push(other);
+                    exprs
+                }
+            }
+        }
+
+        let exprs = split_conjunction(&self.predicate);
+        let unique_cols: HashSet<_> = exprs
+            .iter()
+            .filter_map(|expr| {
+                let Expr::BinaryExpr(BinaryExpr {
+                    left,
+                    op: Operator::Eq,
+                    right,
+                }) = expr
+                else {
+                    return None;
+                };
+                // This is a no-op filter expression
+                if left == right {
+                    return None;
+                }
+
+                match (left.as_ref(), right.as_ref()) {
+                    (Expr::Column(_), Expr::Column(_)) => None,
+                    (Expr::Column(c), _) | (_, Expr::Column(c)) => {
+                        Some(schema.index_of_column(c).unwrap())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+
+        // If we have a functional dependence that is a subset of our predicate,
+        // this filter is scalar
+        for key in unique_keys {
+            if key.source_indices.iter().all(|c| unique_cols.contains(c)) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 /// Window its input based on a set of window spec and window function (e.g. SUM or RANK)
@@ -2405,12 +2489,14 @@ pub struct Unnest {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::{col, exists, in_subquery, lit, placeholder};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::tree_node::TreeNodeVisitor;
-    use datafusion_common::{not_impl_err, DFSchema, TableReference};
+    use datafusion_common::{not_impl_err, Constraint, DFSchema, TableReference};
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn employee_schema() -> Schema {
         Schema::new(vec![
@@ -2872,5 +2958,93 @@ digraph {
 
         plan.replace_params_with_values(&[42i32.into()])
             .expect_err("unexpectedly succeeded to replace an invalid placeholder");
+    }
+
+    #[test]
+    fn test_nullable_schema_after_grouping_set() {
+        let schema = Schema::new(vec![
+            Field::new("foo", DataType::Int32, false),
+            Field::new("bar", DataType::Int32, false),
+        ]);
+
+        let plan = table_scan(TableReference::none(), &schema, None)
+            .unwrap()
+            .aggregate(
+                vec![Expr::GroupingSet(GroupingSet::GroupingSets(vec![
+                    vec![col("foo")],
+                    vec![col("bar")],
+                ]))],
+                vec![count(lit(true))],
+            )
+            .unwrap()
+            .build()
+            .unwrap();
+
+        let output_schema = plan.schema();
+
+        assert!(output_schema
+            .field_with_name(None, "foo")
+            .unwrap()
+            .is_nullable(),);
+        assert!(output_schema
+            .field_with_name(None, "bar")
+            .unwrap()
+            .is_nullable());
+    }
+    #[test]
+    fn test_filter_is_scalar() {
+        // test empty placeholder
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+
+        let source = Arc::new(LogicalTableSource::new(schema));
+        let schema = Arc::new(
+            DFSchema::try_from_qualified_schema(
+                TableReference::bare("tab"),
+                &source.schema(),
+            )
+            .unwrap(),
+        );
+        let scan = Arc::new(LogicalPlan::TableScan(TableScan {
+            table_name: TableReference::bare("tab"),
+            source: source.clone(),
+            projection: None,
+            projected_schema: schema.clone(),
+            filters: vec![],
+            fetch: None,
+        }));
+        let col = schema.field(0).qualified_column();
+
+        let filter = Filter::try_new(
+            Expr::Column(col).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            scan,
+        )
+        .unwrap();
+        assert!(!filter.is_scalar());
+        let unique_schema =
+            Arc::new(schema.as_ref().clone().with_functional_dependencies(
+                FunctionalDependencies::new_from_constraints(
+                    Some(&Constraints::new_unverified(vec![Constraint::Unique(
+                        vec![0],
+                    )])),
+                    1,
+                ),
+            ));
+        let scan = Arc::new(LogicalPlan::TableScan(TableScan {
+            table_name: TableReference::bare("tab"),
+            source,
+            projection: None,
+            projected_schema: unique_schema.clone(),
+            filters: vec![],
+            fetch: None,
+        }));
+        let col = schema.field(0).qualified_column();
+
+        let filter = Filter::try_new(
+            Expr::Column(col).eq(Expr::Literal(ScalarValue::Int32(Some(1)))),
+            scan,
+        )
+        .unwrap();
+        assert!(filter.is_scalar());
     }
 }

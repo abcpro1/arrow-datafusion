@@ -357,9 +357,9 @@ fn string_temporal_coercion(
 /// Coerce `Boolean` to other larger types, like Numeric as `1` or String as "1"
 fn bool_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
     match (lhs_type, rhs_type) {
-        (DataType::Boolean, to_type) => {
-            if can_cast_types(&DataType::Boolean, to_type) {
-                Some(to_type.to_owned())
+        (DataType::Boolean, other_type) | (other_type, DataType::Boolean) => {
+            if can_cast_types(&DataType::Boolean, other_type) {
+                Some(other_type.to_owned())
             } else {
                 None
             }

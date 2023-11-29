@@ -17,7 +17,7 @@
 
 use super::{Between, Expr, Like};
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, BinaryExpr, Cast, GetFieldAccess,
+    AggregateFunction, AggregateUDF, Alias, Any, BinaryExpr, Cast, GetFieldAccess,
     GetIndexedField, InList, InSubquery, Placeholder, ScalarFunction, ScalarUDF, Sort,
     TryCast, WindowFunction,
 };
@@ -171,6 +171,7 @@ impl ExprSchemable for Expr {
             Expr::GetIndexedField(GetIndexedField { expr, field }) => {
                 field_for_index(expr, field, schema).map(|x| x.data_type().clone())
             }
+            Expr::Any(_) => Ok(DataType::Boolean),
         }
     }
 
@@ -281,6 +282,7 @@ impl ExprSchemable for Expr {
                 // in projections
                 Ok(true)
             }
+            Expr::Any(Any { .. }) => Ok(true),
         }
     }
 

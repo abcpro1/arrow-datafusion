@@ -181,6 +181,10 @@ pub enum Expr {
     /// A place holder which hold a reference to a qualified field
     /// in the outer query, used for correlated sub queries.
     OuterReferenceColumn(DataType, Column),
+    /// Predicate applying a comparison operator to all elements
+    /// of a non-scalar expression, returning true if it returns true for
+    /// any element of the non-scalar expression
+    Any(Any),
 }
 
 /// Alias expression
@@ -657,6 +661,13 @@ impl GroupingSet {
     }
 }
 
+#[derive(Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Any {
+    pub op: Operator,
+    pub left: Box<Expr>,
+    pub right: Box<Expr>,
+}
+
 /// Fixed seed for the hashing so that Ords are consistent across runs
 const SEED: ahash::RandomState = ahash::RandomState::with_seeds(0, 0, 0, 0);
 
@@ -733,6 +744,7 @@ impl Expr {
             Expr::TryCast { .. } => "TryCast",
             Expr::WindowFunction { .. } => "WindowFunction",
             Expr::Wildcard { .. } => "Wildcard",
+            Expr::Any(_) => "Any",
         }
     }
 
@@ -1323,6 +1335,13 @@ impl fmt::Display for Expr {
                 }
             },
             Expr::Placeholder(Placeholder { id, .. }) => write!(f, "{id}"),
+            Expr::Any(Any {
+                op,
+                left: lhs,
+                right: rhs,
+            }) => {
+                write!(f, "{} {op} ANY({rhs})", lhs.as_ref())
+            }
         }
     }
 }
@@ -1617,6 +1636,11 @@ fn create_name(e: &Expr) -> Result<String> {
             None => Ok("*".to_string()),
         },
         Expr::Placeholder(Placeholder { id, .. }) => Ok((*id).to_string()),
+        Expr::Any(any) => {
+            let left = create_name(any.left.as_ref())?;
+            let right = create_name(any.right.as_ref())?;
+            Ok(format!("{} {} ANY({})", left, any.op, right))
+        }
     }
 }
 

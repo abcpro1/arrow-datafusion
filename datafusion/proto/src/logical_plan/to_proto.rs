@@ -27,8 +27,9 @@ use crate::protobuf::{
         FinalPhysicalPlan, InitialLogicalPlan, InitialPhysicalPlan, OptimizedLogicalPlan,
         OptimizedPhysicalPlan,
     },
-    AnalyzedLogicalPlanType, CubeNode, EmptyMessage, GroupingSetNode, LogicalExprList,
-    OptimizedLogicalPlanType, OptimizedPhysicalPlanType, PlaceholderNode, RollupNode,
+    AnalyzedLogicalPlanType, AnyNode, CubeNode, EmptyMessage, GroupingSetNode,
+    LogicalExprList, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
+    PlaceholderNode, RollupNode,
 };
 use arrow::{
     datatypes::{
@@ -43,8 +44,8 @@ use datafusion_common::{
     ScalarValue,
 };
 use datafusion_expr::expr::{
-    self, Alias, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField, GroupingSet,
-    InList, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
+    self, Alias, Any, Between, BinaryExpr, Cast, GetFieldAccess, GetIndexedField,
+    GroupingSet, InList, Like, Placeholder, ScalarFunction, ScalarUDF, Sort,
 };
 use datafusion_expr::{
     logical_plan::PlanType, logical_plan::StringifiedPlan, AggregateFunction,
@@ -1054,6 +1055,13 @@ impl TryFrom<&Expr> for protobuf::LogicalExprNode {
                     })),
                 }
             }
+            Expr::Any(Any { op, left, right }) => Self {
+                expr_type: Some(ExprType::Any(Box::new(AnyNode {
+                    left: Some(Box::new(left.as_ref().try_into()?)),
+                    op: format!("{op:?}"),
+                    right: Some(Box::new(right.as_ref().try_into()?)),
+                }))),
+            },
         };
 
         Ok(expr_node)

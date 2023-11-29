@@ -18,7 +18,7 @@
 //! Tree node implementation for logical expr
 
 use crate::expr::{
-    AggregateFunction, AggregateUDF, Alias, Between, BinaryExpr, Case, Cast,
+    AggregateFunction, AggregateUDF, Alias, Any, Between, BinaryExpr, Case, Cast,
     GetIndexedField, GroupingSet, InList, InSubquery, Like, Placeholder, ScalarFunction,
     ScalarUDF, Sort, TryCast, WindowFunction,
 };
@@ -137,6 +137,9 @@ impl TreeNode for Expr {
                 expr_vec.extend(list.clone());
                 expr_vec
             }
+            Expr::Any(Any { left, right, .. }) => {
+                vec![left.as_ref().clone(), right.as_ref().clone()]
+           }
         };
 
         for child in children.iter() {
@@ -359,6 +362,11 @@ impl TreeNode for Expr {
             Expr::Placeholder(Placeholder { id, data_type }) => {
                 Expr::Placeholder(Placeholder { id, data_type })
             }
+            Expr::Any(Any { op, left, right }) => Expr::Any(Any {
+                op,
+                left: transform_boxed(left, &mut transform)?,
+                right: transform_boxed(right, &mut transform)?,
+            }),
         })
     }
 }

@@ -396,6 +396,7 @@ message LogicalExprNode {
 
     PlaceholderNode placeholder = 34;
 
+    AnyNode any = 35;
   }
 }
 
@@ -801,6 +802,12 @@ enum WindowFrameBoundType {
 message WindowFrameBound {
   WindowFrameBoundType window_frame_bound_type = 1;
   ScalarValue bound_value = 2;
+}
+
+message AnyNode {
+  LogicalExprNode left = 1;
+  string op = 2;
+  LogicalExprNode right = 3;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////

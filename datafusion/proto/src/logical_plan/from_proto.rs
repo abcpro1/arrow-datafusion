@@ -1725,6 +1725,15 @@ pub fn parse_expr(
                 Some(data_type.try_into()?),
             ))),
         },
+        ExprType::Any(any) => Ok(Expr::Any(expr::Any {
+            op: from_proto_binary_op(any.op.as_str())?,
+            left: Box::new(parse_required_expr(any.left.as_deref(), registry, "left")?),
+            right: Box::new(parse_required_expr(
+                any.right.as_deref(),
+                registry,
+                "right",
+            )?),
+        })),
     }
 }
 

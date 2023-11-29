@@ -2789,6 +2789,14 @@ select string_to_list(e, 'm') from values;
 [adipiscing]
 NULL
 
+query I
+SELECT a FROM values WHERE a = ANY(ARRAY[1, 2, 5, 6]);
+----
+1
+2
+5
+6
+
 ### Delete tables
 
 statement ok

@@ -33,6 +33,7 @@ use datafusion_common::{
     internal_err, not_impl_err, plan_err, Column, DFSchema, DataFusionError, Result,
     ScalarValue,
 };
+use datafusion_expr::expr::Any;
 use datafusion_expr::expr::InList;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{
@@ -484,6 +485,24 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
             SQLExpr::Struct { values, fields } => {
                 self.parse_struct(values, fields, schema, planner_context)
+            }
+            SQLExpr::AnyOp {
+                left,
+                compare_op,
+                right,
+            } => {
+                let left = Box::new(self.sql_expr_to_logical_expr(
+                    left.as_ref().clone(),
+                    schema,
+                    planner_context,
+                )?);
+                let right = Box::new(self.sql_expr_to_logical_expr(
+                    right.as_ref().clone(),
+                    schema,
+                    planner_context,
+                )?);
+                let op = self.parse_sql_binary_op(compare_op)?;
+                Ok(Expr::Any(Any { op, left, right }))
             }
 
             _ => not_impl_err!("Unsupported ast node in sqltorel: {sql:?}"),

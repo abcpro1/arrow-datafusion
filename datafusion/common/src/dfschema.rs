@@ -158,16 +158,16 @@ impl DFSchema {
             .collect::<Vec<(&OwnedTableReference, &String)>>();
         qualified_names.sort();
         for (qualifier, name) in &qualified_names {
-            if unqualified_names.contains(name) {
-                return Err(DataFusionError::SchemaError(
-                    SchemaError::AmbiguousReference {
-                        field: Column {
-                            relation: Some((*qualifier).clone()),
-                            name: name.to_string(),
-                        },
-                    },
-                ));
-            }
+            // if unqualified_names.contains(name) {
+            //     return Err(DataFusionError::SchemaError(
+            //         SchemaError::AmbiguousReference {
+            //             field: Column {
+            //                 relation: Some((*qualifier).clone()),
+            //                 name: name.to_string(),
+            //             },
+            //         },
+            //     ));
+            // }
         }
         Ok(Self {
             fields,
